@@ -1,0 +1,315 @@
+// Procedural Noise Shader - Generación de ruido en tiempo real
+// Compatible con DirectX 9 - Shader Model 3.0
+
+// Matrices
+float4x4 WorldViewProj;
+float4x4 WorldMatrix;
+
+// Tiempo para animación
+float Time = 0.0f;
+float TimeScale = 1.0f;
+
+// Parámetros de ruido
+float NoiseScale = 4.0f;
+int NoiseOctaves = 4;
+float NoisePersistence = 0.5f;
+float NoiseFrequency = 1.0f;
+float NoiseAmplitude = 1.0f;
+
+// Colores
+float4 Color1 = float4(0.0f, 0.0f, 0.0f, 1.0f);
+float4 Color2 = float4(1.0f, 1.0f, 1.0f, 1.0f);
+float4 Color3 = float4(0.5f, 0.5f, 0.5f, 1.0f);
+
+// Parámetros de efecto
+float DistortionStrength = 0.1f;
+float AnimationSpeed = 1.0f;
+float Threshold = 0.5f;
+float Contrast = 1.0f;
+float Brightness = 0.0f;
+
+// Tipos de ruido
+int NoiseType = 0; // 0=Perlin, 1=Simplex, 2=Ridge, 3=Turbulence, 4=Voronoi
+
+struct VS_INPUT
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float2 TexCoord : TEXCOORD0;
+};
+
+struct VS_OUTPUT
+{
+    float4 Position : POSITION;
+    float2 TexCoord : TEXCOORD0;
+    float3 Normal : TEXCOORD1;
+    float3 WorldPos : TEXCOORD2;
+};
+
+// =============== FUNCIONES DE RUIDO ===============
+
+// Hash function para generar números pseudo-aleatorios
+float Hash(float2 p)
+{
+    return frac(sin(dot(p, float2(127.1f, 311.7f))) * 43758.5453f);
+}
+
+float Hash3D(float3 p)
+{
+    return frac(sin(dot(p, float3(127.1f, 311.7f, 74.7f))) * 43758.5453f);
+}
+
+// Interpolación suave
+float SmoothStep(float t)
+{
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Ruido de valores
+float ValueNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+
+    float a = Hash(i);
+    float b = Hash(i + float2(1.0f, 0.0f));
+    float c = Hash(i + float2(0.0f, 1.0f));
+    float d = Hash(i + float2(1.0f, 1.0f));
+
+    float2 u = f * f * (3.0f - 2.0f * f);
+
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+// Ruido Perlin 2D
+float PerlinNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+
+    // Gradientes en las esquinas
+    float2 g00 = normalize(float2(Hash(i) - 0.5f, Hash(i + float2(1.0f, 0.0f)) - 0.5f));
+    float2 g10 = normalize(float2(Hash(i + float2(1.0f, 0.0f)) - 0.5f, Hash(i + float2(0.0f, 1.0f)) - 0.5f));
+    float2 g01 = normalize(float2(Hash(i + float2(0.0f, 1.0f)) - 0.5f, Hash(i + float2(1.0f, 1.0f)) - 0.5f));
+    float2 g11 = normalize(float2(Hash(i + float2(1.0f, 1.0f)) - 0.5f, Hash(i) - 0.5f));
+
+    // Productos punto
+    float n00 = dot(g00, f);
+    float n10 = dot(g10, f - float2(1.0f, 0.0f));
+    float n01 = dot(g01, f - float2(0.0f, 1.0f));
+    float n11 = dot(g11, f - float2(1.0f, 1.0f));
+
+    // Interpolación
+    float2 u = f * f * (3.0f - 2.0f * f);
+    float n0 = lerp(n00, n10, u.x);
+    float n1 = lerp(n01, n11, u.x);
+
+    return lerp(n0, n1, u.y);
+}
+
+// Ruido Simplex 2D (aproximación)
+float SimplexNoise(float2 p)
+{
+    const float F2 = 0.366025f; // (sqrt(3) - 1) / 2
+    const float G2 = 0.211325f; // (3 - sqrt(3)) / 6
+
+    // Skew input space
+    float s = (p.x + p.y) * F2;
+    float2 i = floor(p + s);
+    float t = (i.x + i.y) * G2;
+    float2 X0 = i - t;
+    float2 x0 = p - X0;
+
+    // Determinar simplex
+    float2 i1 = (x0.x > x0.y) ? float2(1.0f, 0.0f) : float2(0.0f, 1.0f);
+
+    float2 x1 = x0 - i1 + G2;
+    float2 x2 = x0 - 1.0f + 2.0f * G2;
+
+    // Gradientes
+    float2 g0 = normalize(float2(Hash(i) - 0.5f, Hash(i + float2(0.1f, 0.1f)) - 0.5f));
+    float2 g1 = normalize(float2(Hash(i + i1) - 0.5f, Hash(i + i1 + float2(0.1f, 0.1f)) - 0.5f));
+    float2 g2 = normalize(float2(Hash(i + 1.0f) - 0.5f, Hash(i + 1.0f + float2(0.1f, 0.1f)) - 0.5f));
+
+    // Contribuciones
+    float t0 = 0.5f - dot(x0, x0);
+    float n0 = (t0 < 0.0f) ? 0.0f : pow(t0, 4.0f) * dot(g0, x0);
+
+    float t1 = 0.5f - dot(x1, x1);
+    float n1 = (t1 < 0.0f) ? 0.0f : pow(t1, 4.0f) * dot(g1, x1);
+
+    float t2 = 0.5f - dot(x2, x2);
+    float n2 = (t2 < 0.0f) ? 0.0f : pow(t2, 4.0f) * dot(g2, x2);
+
+    return 70.0f * (n0 + n1 + n2);
+}
+
+// Ridge Noise
+float RidgeNoise(float2 p)
+{
+    return 1.0f - abs(PerlinNoise(p));
+}
+
+// Turbulence
+float Turbulence(float2 p, int octaves)
+{
+    float value = 0.0f;
+    float amplitude = 1.0f;
+    float frequency = 1.0f;
+
+    for (int i = 0; i < octaves; i++)
+    {
+        value += abs(PerlinNoise(p * frequency)) * amplitude;
+        amplitude *= 0.5f;
+        frequency *= 2.0f;
+    }
+
+    return value;
+}
+
+// Voronoi Noise
+float VoronoiNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+
+    float minDist = 1.0f;
+
+    for (int x = -1; x <= 1; x++)
+    {
+        for (int y = -1; y <= 1; y++)
+        {
+            float2 neighbor = float2(x, y);
+            float2 point = neighbor + float2(Hash(i + neighbor), Hash(i + neighbor + float2(0.1f, 0.1f)));
+            float2 diff = point - f;
+            float dist = length(diff);
+            minDist = min(minDist, dist);
+        }
+    }
+
+    return minDist;
+}
+
+// Fractal Noise (múltiples octavas)
+float FractalNoise(float2 p, int octaves, float persistence)
+{
+    float value = 0.0f;
+    float amplitude = 1.0f;
+    float frequency = 1.0f;
+    float maxValue = 0.0f;
+
+    for (int i = 0; i < octaves; i++)
+    {
+        float noise = 0.0f;
+
+        if (NoiseType == 0) noise = PerlinNoise(p * frequency);
+        else if (NoiseType == 1) noise = SimplexNoise(p * frequency);
+        else if (NoiseType == 2) noise = RidgeNoise(p * frequency);
+        else if (NoiseType == 3) noise = Turbulence(p * frequency, 2);
+        else if (NoiseType == 4) noise = VoronoiNoise(p * frequency);
+
+        value += noise * amplitude;
+        maxValue += amplitude;
+        amplitude *= persistence;
+        frequency *= 2.0f;
+    }
+
+    return value / maxValue;
+}
+
+VS_OUTPUT VS(VS_INPUT input)
+{
+    VS_OUTPUT output;
+
+    output.Position = mul(float4(input.Position, 1.0f), WorldViewProj);
+    output.TexCoord = input.TexCoord;
+    output.Normal = normalize(mul(input.Normal, (float3x3)WorldMatrix));
+    output.WorldPos = mul(float4(input.Position, 1.0f), WorldMatrix).xyz;
+
+    return output;
+}
+
+float4 PS(VS_OUTPUT input) : COLOR
+{
+    float animTime = Time * TimeScale;
+
+    // Coordenadas base
+    float2 uv = input.TexCoord * NoiseScale;
+
+    // Añadir movimiento temporal
+    uv += float2(sin(animTime * AnimationSpeed), cos(animTime * AnimationSpeed * 0.7f)) * 0.5f;
+
+    // Generar ruido principal
+    float noise = FractalNoise(uv, NoiseOctaves, NoisePersistence);
+
+    // Añadir distorsión
+    if (DistortionStrength > 0.0f)
+    {
+        float2 distortion = float2(
+            FractalNoise(uv + float2(100.0f, 0.0f), 3, 0.5f),
+            FractalNoise(uv + float2(0.0f, 100.0f), 3, 0.5f)
+        ) * DistortionStrength;
+
+        noise = FractalNoise(uv + distortion, NoiseOctaves, NoisePersistence);
+    }
+
+    // Aplicar contraste y brillo
+    noise = saturate((noise + Brightness) * Contrast);
+
+    // Aplicar threshold
+    if (Threshold > 0.0f)
+    {
+        noise = (noise > Threshold) ? 1.0f : 0.0f;
+    }
+
+    // Interpolación de colores
+    float4 finalColor;
+
+    if (noise < 0.5f)
+    {
+        finalColor = lerp(Color1, Color3, noise * 2.0f);
+    }
+    else
+    {
+        finalColor = lerp(Color3, Color2, (noise - 0.5f) * 2.0f);
+    }
+
+    return finalColor;
+}
+
+// Técnicas para diferentes tipos de ruido
+technique PerlinNoise
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}
+
+technique SimplexNoise
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}
+
+technique TurbulenceNoise
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}
+
+technique VoronoiNoise
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}

@@ -1,0 +1,190 @@
+// Multi-Texture Shader - Hasta 8 texturas simultáneas
+// Compatible con DirectX 9 - Shader Model 3.0
+
+// Matrices
+float4x4 WorldViewProj;
+float4x4 WorldMatrix;
+
+// Tiempo para animaciones
+float Time = 0.0f;
+
+// Propiedades de las capas de textura
+float4 LayerColors[8] = {
+    float4(1,1,1,1), float4(1,1,1,1), float4(1,1,1,1), float4(1,1,1,1),
+    float4(1,1,1,1), float4(1,1,1,1), float4(1,1,1,1), float4(1,1,1,1)
+};
+
+float2 LayerUVScale[8] = {
+    float2(1,1), float2(1,1), float2(1,1), float2(1,1),
+    float2(1,1), float2(1,1), float2(1,1), float2(1,1)
+};
+
+float2 LayerUVOffset[8] = {
+    float2(0,0), float2(0,0), float2(0,0), float2(0,0),
+    float2(0,0), float2(0,0), float2(0,0), float2(0,0)
+};
+
+float2 LayerScrollSpeed[8] = {
+    float2(0,0), float2(0,0), float2(0,0), float2(0,0),
+    float2(0,0), float2(0,0), float2(0,0), float2(0,0)
+};
+
+float LayerRotation[8] = { 0,0,0,0,0,0,0,0 };
+float LayerIntensity[8] = { 1,1,1,1,1,1,1,1 };
+bool LayerEnabled[8] = { true,false,false,false,false,false,false,false };
+
+// Texturas
+texture Texture0; texture Texture1; texture Texture2; texture Texture3;
+texture Texture4; texture Texture5; texture Texture6; texture Texture7;
+
+// Samplers
+sampler Sampler0 = sampler_state { Texture = <Texture0>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+sampler Sampler1 = sampler_state { Texture = <Texture1>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+sampler Sampler2 = sampler_state { Texture = <Texture2>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+sampler Sampler3 = sampler_state { Texture = <Texture3>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+sampler Sampler4 = sampler_state { Texture = <Texture4>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+sampler Sampler5 = sampler_state { Texture = <Texture5>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+sampler Sampler6 = sampler_state { Texture = <Texture6>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+sampler Sampler7 = sampler_state { Texture = <Texture7>; MinFilter = LINEAR; MagFilter = LINEAR; MipFilter = LINEAR; AddressU = WRAP; AddressV = WRAP; };
+
+struct VS_INPUT
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float2 TexCoord0 : TEXCOORD0;
+    float2 TexCoord1 : TEXCOORD1;
+};
+
+struct VS_OUTPUT
+{
+    float4 Position : POSITION;
+    float2 TexCoord0 : TEXCOORD0;
+    float2 TexCoord1 : TEXCOORD1;
+    float3 Normal : TEXCOORD2;
+    float3 WorldPos : TEXCOORD3;
+};
+
+// Función para transformar UVs
+float2 TransformUV(float2 uv, int layer)
+{
+    float2 transformedUV = uv;
+
+    // Aplicar escala
+    transformedUV *= LayerUVScale[layer];
+
+    // Aplicar rotación
+    if (LayerRotation[layer] != 0.0f)
+    {
+        float cosR = cos(LayerRotation[layer]);
+        float sinR = sin(LayerRotation[layer]);
+        float2 center = float2(0.5f, 0.5f);
+        transformedUV -= center;
+        transformedUV = float2(
+            transformedUV.x * cosR - transformedUV.y * sinR,
+            transformedUV.x * sinR + transformedUV.y * cosR
+        );
+        transformedUV += center;
+    }
+
+    // Aplicar offset y scroll
+    transformedUV += LayerUVOffset[layer] + LayerScrollSpeed[layer] * Time;
+
+    return transformedUV;
+}
+
+VS_OUTPUT VS(VS_INPUT input)
+{
+    VS_OUTPUT output;
+
+    output.Position = mul(float4(input.Position, 1.0f), WorldViewProj);
+    output.TexCoord0 = input.TexCoord0;
+    output.TexCoord1 = input.TexCoord1;
+    output.Normal = normalize(mul(input.Normal, (float3x3)WorldMatrix));
+    output.WorldPos = mul(float4(input.Position, 1.0f), WorldMatrix).xyz;
+
+    return output;
+}
+
+// Función para muestrear textura por índice
+float4 SampleTexture(int index, float2 uv)
+{
+    if (index == 0) return tex2D(Sampler0, uv);
+    else if (index == 1) return tex2D(Sampler1, uv);
+    else if (index == 2) return tex2D(Sampler2, uv);
+    else if (index == 3) return tex2D(Sampler3, uv);
+    else if (index == 4) return tex2D(Sampler4, uv);
+    else if (index == 5) return tex2D(Sampler5, uv);
+    else if (index == 6) return tex2D(Sampler6, uv);
+    else if (index == 7) return tex2D(Sampler7, uv);
+    return float4(1, 1, 1, 1);
+}
+
+float4 PS(VS_OUTPUT input) : COLOR
+{
+    float4 finalColor = float4(0, 0, 0, 1);
+    bool hasAnyLayer = false;
+
+    // Procesar cada capa de textura
+    for (int i = 0; i < 8; i++)
+    {
+        if (!LayerEnabled[i]) continue;
+
+        // Transformar UVs para esta capa
+        float2 uv = TransformUV(input.TexCoord0, i);
+
+        // Muestrear textura
+        float4 layerColor = SampleTexture(i, uv) * LayerColors[i] * LayerIntensity[i];
+
+        if (i == 0 || !hasAnyLayer)
+        {
+            // Primera capa activa - reemplazar
+            finalColor.rgb = layerColor.rgb;
+            finalColor.a = layerColor.a;
+        }
+        else
+        {
+            // Capas adicionales - mezclar
+            float alpha = layerColor.a;
+            finalColor.rgb = lerp(finalColor.rgb, layerColor.rgb, alpha);
+            finalColor.a = max(finalColor.a, alpha);
+        }
+
+        hasAnyLayer = true;
+    }
+
+    // Si no hay capas activas, usar color por defecto
+    if (!hasAnyLayer)
+    {
+        finalColor = float4(1, 0, 1, 1); // Magenta para debug
+    }
+
+    return finalColor;
+}
+
+// Técnicas diferentes para distintos números de texturas
+technique MultiTexture2
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}
+
+technique MultiTexture4
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}
+
+technique MultiTexture8
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}
