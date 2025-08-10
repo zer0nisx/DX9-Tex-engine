@@ -1,0 +1,142 @@
+// Basic Shader - Texturas simples con iluminación
+// Compatible con DirectX 9 - Shader Model 3.0
+
+// Matrices de transformación
+float4x4 WorldMatrix;
+float4x4 ViewMatrix;
+float4x4 ProjectionMatrix;
+float4x4 WorldViewProj;
+
+// Propiedades del material
+float4 DiffuseColor = float4(1.0f, 1.0f, 1.0f, 1.0f);
+float4 SpecularColor = float4(0.5f, 0.5f, 0.5f, 1.0f);
+float4 EmissiveColor = float4(0.0f, 0.0f, 0.0f, 1.0f);
+float Shininess = 32.0f;
+
+// Iluminación
+float3 LightDirection = float3(0.0f, -1.0f, 0.0f);
+float4 LightColor = float4(1.0f, 1.0f, 1.0f, 1.0f);
+float3 CameraPosition = float3(0.0f, 0.0f, 0.0f);
+
+// Texturas
+texture DiffuseTexture;
+texture NormalTexture;
+texture SpecularTexture;
+
+// Samplers
+sampler DiffuseSampler = sampler_state
+{
+    Texture = <DiffuseTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+sampler NormalSampler = sampler_state
+{
+    Texture = <NormalTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+sampler SpecularSampler = sampler_state
+{
+    Texture = <SpecularTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+// Vertex Input
+struct VS_INPUT
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float2 TexCoord : TEXCOORD0;
+    float3 Tangent : TANGENT;
+    float3 Binormal : BINORMAL;
+};
+
+// Vertex Output / Pixel Input
+struct VS_OUTPUT
+{
+    float4 Position : POSITION;
+    float2 TexCoord : TEXCOORD0;
+    float3 Normal : TEXCOORD1;
+    float3 WorldPos : TEXCOORD2;
+    float3 Tangent : TEXCOORD3;
+    float3 Binormal : TEXCOORD4;
+};
+
+// Vertex Shader
+VS_OUTPUT VS(VS_INPUT input)
+{
+    VS_OUTPUT output;
+
+    // Transformar posición a espacio de pantalla
+    output.Position = mul(float4(input.Position, 1.0f), WorldViewProj);
+
+    // Pasar coordenadas de textura
+    output.TexCoord = input.TexCoord;
+
+    // Transformar normal, tangente y binormal al espacio del mundo
+    output.Normal = normalize(mul(input.Normal, (float3x3)WorldMatrix));
+    output.Tangent = normalize(mul(input.Tangent, (float3x3)WorldMatrix));
+    output.Binormal = normalize(mul(input.Binormal, (float3x3)WorldMatrix));
+
+    // Posición en el mundo
+    output.WorldPos = mul(float4(input.Position, 1.0f), WorldMatrix).xyz;
+
+    return output;
+}
+
+// Pixel Shader
+float4 PS(VS_OUTPUT input) : COLOR
+{
+    // Obtener color diffuse de la textura
+    float4 diffuseColor = tex2D(DiffuseSampler, input.TexCoord) * DiffuseColor;
+
+    // Obtener normal del mapa de normales
+    float3 normalMap = tex2D(NormalSampler, input.TexCoord).xyz * 2.0f - 1.0f;
+
+    // Crear matriz TBN para transformar la normal
+    float3x3 TBN = float3x3(input.Tangent, input.Binormal, input.Normal);
+    float3 normal = normalize(mul(normalMap, TBN));
+
+    // Cálculo de iluminación
+    float3 lightDir = normalize(-LightDirection);
+    float3 viewDir = normalize(CameraPosition - input.WorldPos);
+    float3 halfDir = normalize(lightDir + viewDir);
+
+    // Componente diffuse
+    float NdotL = max(dot(normal, lightDir), 0.0f);
+    float3 diffuse = diffuseColor.rgb * LightColor.rgb * NdotL;
+
+    // Componente specular
+    float NdotH = max(dot(normal, halfDir), 0.0f);
+    float specularIntensity = tex2D(SpecularSampler, input.TexCoord).r;
+    float3 specular = SpecularColor.rgb * LightColor.rgb *
+                     pow(NdotH, Shininess) * specularIntensity;
+
+    // Color final
+    float3 finalColor = diffuse + specular + EmissiveColor.rgb;
+
+    return float4(finalColor, diffuseColor.a);
+}
+
+// Técnicas
+technique BasicTechnique
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+    }
+}

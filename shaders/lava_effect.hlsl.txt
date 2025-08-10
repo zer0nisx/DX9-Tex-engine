@@ -1,0 +1,226 @@
+// Lava Effect Shader - Efectos de lava animada con distorsión y emisión
+// Compatible con DirectX 9 - Shader Model 3.0
+
+// Matrices
+float4x4 WorldViewProj;
+float4x4 WorldMatrix;
+
+// Tiempo y animación
+float Time = 0.0f;
+float TimeScale = 1.0f;
+
+// Propiedades de la lava
+float4 BaseColor = float4(0.8f, 0.2f, 0.1f, 1.0f);      // Color base rojo oscuro
+float4 HotColor = float4(1.0f, 0.8f, 0.2f, 1.0f);       // Color caliente amarillo
+float4 EmissionColor = float4(1.0f, 0.4f, 0.0f, 1.0f);  // Color de emisión
+
+// Parámetros de scroll
+float2 ScrollSpeed1 = float2(0.1f, 0.05f);
+float2 ScrollSpeed2 = float2(-0.05f, 0.08f);
+float2 ScrollSpeed3 = float2(0.08f, -0.03f);
+
+// Parámetros de noise
+float NoiseScale1 = 2.0f;
+float NoiseScale2 = 4.0f;
+float NoiseScale3 = 8.0f;
+float NoiseIntensity = 1.0f;
+
+// Intensidades
+float EmissionIntensity = 2.0f;
+float DistortionStrength = 0.1f;
+float PulseFrequency = 2.0f;
+float PulseAmplitude = 0.3f;
+
+// Texturas
+texture LavaBaseTexture;    // Textura base de lava
+texture LavaNoiseTexture;   // Textura de ruido para distorsión
+texture LavaGlowTexture;    // Textura de brillo
+
+sampler LavaBaseSampler = sampler_state
+{
+    Texture = <LavaBaseTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+sampler LavaNoiseSampler = sampler_state
+{
+    Texture = <LavaNoiseTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+sampler LavaGlowSampler = sampler_state
+{
+    Texture = <LavaGlowTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+struct VS_INPUT
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float2 TexCoord : TEXCOORD0;
+};
+
+struct VS_OUTPUT
+{
+    float4 Position : POSITION;
+    float2 TexCoord : TEXCOORD0;
+    float3 Normal : TEXCOORD1;
+    float3 WorldPos : TEXCOORD2;
+};
+
+// Función de noise procedural
+float Noise(float2 uv)
+{
+    return frac(sin(dot(uv, float2(12.9898f, 78.233f))) * 43758.5453f);
+}
+
+// Noise suavizado
+float SmoothNoise(float2 uv)
+{
+    float2 i = floor(uv);
+    float2 f = frac(uv);
+
+    f = f * f * (3.0f - 2.0f * f); // Suavizado hermite
+
+    float a = Noise(i);
+    float b = Noise(i + float2(1.0f, 0.0f));
+    float c = Noise(i + float2(0.0f, 1.0f));
+    float d = Noise(i + float2(1.0f, 1.0f));
+
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+// Noise fractal
+float FractalNoise(float2 uv, int octaves)
+{
+    float value = 0.0f;
+    float amplitude = 1.0f;
+    float frequency = 1.0f;
+
+    for (int i = 0; i < octaves; i++)
+    {
+        value += SmoothNoise(uv * frequency) * amplitude;
+        amplitude *= 0.5f;
+        frequency *= 2.0f;
+    }
+
+    return value;
+}
+
+VS_OUTPUT VS(VS_INPUT input)
+{
+    VS_OUTPUT output;
+
+    output.Position = mul(float4(input.Position, 1.0f), WorldViewProj);
+    output.TexCoord = input.TexCoord;
+    output.Normal = normalize(mul(input.Normal, (float3x3)WorldMatrix));
+    output.WorldPos = mul(float4(input.Position, 1.0f), WorldMatrix).xyz;
+
+    return output;
+}
+
+float4 PS(VS_OUTPUT input) : COLOR
+{
+    float animTime = Time * TimeScale;
+
+    // Coordenadas base
+    float2 baseUV = input.TexCoord;
+
+    // Múltiples capas de scroll para crear movimiento complejo
+    float2 uv1 = baseUV + ScrollSpeed1 * animTime;
+    float2 uv2 = baseUV + ScrollSpeed2 * animTime;
+    float2 uv3 = baseUV + ScrollSpeed3 * animTime;
+
+    // Generar noise procedural para distorsión
+    float noise1 = FractalNoise(uv1 * NoiseScale1, 4);
+    float noise2 = FractalNoise(uv2 * NoiseScale2, 3);
+    float noise3 = FractalNoise(uv3 * NoiseScale3, 2);
+
+    // Combinar noise para crear patrón complejo
+    float combinedNoise = (noise1 + noise2 * 0.5f + noise3 * 0.25f) / 1.75f;
+
+    // Aplicar distorsión a las UVs
+    float2 distortion = float2(
+        sin(combinedNoise * 6.28f + animTime) * DistortionStrength,
+        cos(combinedNoise * 6.28f + animTime * 0.7f) * DistortionStrength
+    );
+
+    float2 distortedUV = baseUV + distortion;
+
+    // Muestrear texturas con UVs distorsionadas
+    float4 baseTexture = tex2D(LavaBaseSampler, distortedUV);
+    float4 noiseTexture = tex2D(LavaNoiseSampler, uv1);
+    float4 glowTexture = tex2D(LavaGlowSampler, uv2);
+
+    // Crear máscara de calor basada en noise
+    float heatMask = saturate(combinedNoise + sin(animTime * PulseFrequency) * PulseAmplitude);
+
+    // Interpolar entre colores base y caliente
+    float4 lavaColor = lerp(BaseColor, HotColor, heatMask);
+
+    // Aplicar textura base
+    lavaColor *= baseTexture;
+
+    // Añadir variación con noise texture
+    lavaColor.rgb += noiseTexture.rgb * 0.2f;
+
+    // Calcular emisión
+    float emissionMask = saturate(heatMask * glowTexture.r);
+    float3 emission = EmissionColor.rgb * emissionMask * EmissionIntensity;
+
+    // Añadir pulsación en la emisión
+    float pulse = 1.0f + sin(animTime * PulseFrequency * 2.0f) * 0.2f;
+    emission *= pulse;
+
+    // Color final
+    float4 finalColor;
+    finalColor.rgb = lavaColor.rgb + emission;
+    finalColor.a = lavaColor.a;
+
+    // Aumentar brillo en áreas calientes
+    finalColor.rgb += heatMask * 0.3f;
+
+    return finalColor;
+}
+
+// Técnica principal
+technique LavaTechnique
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+
+        // Estados para emisión
+        AlphaBlendEnable = true;
+        SrcBlend = SrcAlpha;
+        DestBlend = One; // Additive blending para emisión
+    }
+}
+
+// Técnica sin emisión (para mejor performance)
+technique LavaSimple
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+
+        AlphaBlendEnable = true;
+        SrcBlend = SrcAlpha;
+        DestBlend = InvSrcAlpha;
+    }
+}

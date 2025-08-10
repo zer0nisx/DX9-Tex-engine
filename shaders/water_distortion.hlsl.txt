@@ -1,0 +1,289 @@
+// Water Distortion Shader - Efectos de agua con ondas y distorsión
+// Compatible con DirectX 9 - Shader Model 3.0
+
+// Matrices
+float4x4 WorldMatrix;
+float4x4 ViewMatrix;
+float4x4 ProjectionMatrix;
+float4x4 WorldViewProj;
+
+// Tiempo para animación
+float Time = 0.0f;
+float TimeScale = 1.0f;
+
+// Posición de cámara
+float3 CameraPosition = float3(0.0f, 0.0f, 0.0f);
+
+// Propiedades del agua
+float4 ShallowColor = float4(0.0f, 0.6f, 1.0f, 0.8f);    // Azul claro
+float4 DeepColor = float4(0.0f, 0.2f, 0.6f, 1.0f);       // Azul oscuro
+float4 FoamColor = float4(1.0f, 1.0f, 1.0f, 1.0f);       // Espuma blanca
+
+// Parámetros de ondas
+float WaveSpeed = 1.0f;
+float WaveScale = 4.0f;
+float WaveHeight = 0.1f;
+float WaveDistortion = 0.05f;
+
+// Parámetros de reflexión y refracción
+float ReflectionIntensity = 0.8f;
+float RefractionIntensity = 0.3f;
+float FresnelPower = 2.0f;
+float WaterDepth = 1.0f;
+
+// Parámetros de espuma
+float FoamThreshold = 0.7f;
+float FoamIntensity = 1.5f;
+float FoamScale = 8.0f;
+
+// Texturas
+texture WaterNormalMap;     // Mapa de normales para ondas
+texture WaterNoiseTexture;  // Ruido para distorsión
+texture ReflectionTexture;  // Textura de reflexión
+texture RefractionTexture;  // Textura de refracción
+textureCUBE SkyboxTexture;  // Skybox para reflexiones
+
+// Samplers
+sampler WaterNormalSampler = sampler_state
+{
+    Texture = <WaterNormalMap>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+sampler WaterNoiseSampler = sampler_state
+{
+    Texture = <WaterNoiseTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = WRAP;
+    AddressV = WRAP;
+};
+
+sampler ReflectionSampler = sampler_state
+{
+    Texture = <ReflectionTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+};
+
+sampler RefractionSampler = sampler_state
+{
+    Texture = <RefractionTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+};
+
+samplerCUBE SkyboxSampler = sampler_state
+{
+    Texture = <SkyboxTexture>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+    AddressW = CLAMP;
+};
+
+struct VS_INPUT
+{
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float2 TexCoord : TEXCOORD0;
+};
+
+struct VS_OUTPUT
+{
+    float4 Position : POSITION;
+    float2 TexCoord : TEXCOORD0;
+    float3 Normal : TEXCOORD1;
+    float3 WorldPos : TEXCOORD2;
+    float3 ViewDirection : TEXCOORD3;
+    float4 ProjectedPos : TEXCOORD4;
+    float WaveHeight : TEXCOORD5;
+};
+
+// Función para generar ondas procedurales
+float GenerateWave(float2 pos, float time, float2 direction, float frequency, float amplitude)
+{
+    float phase = dot(normalize(direction), pos) * frequency + time;
+    return sin(phase) * amplitude;
+}
+
+// Múltiples ondas superpuestas
+float MultiWave(float2 pos, float time)
+{
+    float wave = 0.0f;
+
+    // Onda principal
+    wave += GenerateWave(pos, time * WaveSpeed, float2(1.0f, 0.0f), WaveScale, WaveHeight);
+
+    // Ondas secundarias
+    wave += GenerateWave(pos, time * WaveSpeed * 0.7f, float2(0.5f, 0.8f), WaveScale * 1.5f, WaveHeight * 0.5f);
+    wave += GenerateWave(pos, time * WaveSpeed * 1.3f, float2(-0.8f, 0.3f), WaveScale * 0.8f, WaveHeight * 0.3f);
+    wave += GenerateWave(pos, time * WaveSpeed * 2.1f, float2(0.2f, -0.9f), WaveScale * 2.0f, WaveHeight * 0.2f);
+
+    return wave;
+}
+
+// Calcular normal de onda
+float3 CalculateWaveNormal(float2 pos, float time, float epsilon)
+{
+    float heightL = MultiWave(pos - float2(epsilon, 0), time);
+    float heightR = MultiWave(pos + float2(epsilon, 0), time);
+    float heightD = MultiWave(pos - float2(0, epsilon), time);
+    float heightU = MultiWave(pos + float2(0, epsilon), time);
+
+    float3 normal = normalize(float3(heightL - heightR, 2.0f * epsilon, heightD - heightU));
+    return normal;
+}
+
+VS_OUTPUT VS(VS_INPUT input)
+{
+    VS_OUTPUT output;
+
+    float animTime = Time * TimeScale;
+
+    // Calcular altura de onda
+    float waveHeight = MultiWave(input.Position.xz, animTime);
+
+    // Aplicar desplazamiento vertical
+    float3 worldPos = mul(float4(input.Position, 1.0f), WorldMatrix).xyz;
+    worldPos.y += waveHeight;
+
+    // Transformar a espacio de pantalla
+    output.Position = mul(float4(worldPos, 1.0f), mul(ViewMatrix, ProjectionMatrix));
+    output.ProjectedPos = output.Position;
+
+    // Calcular normal de onda
+    float3 waveNormal = CalculateWaveNormal(input.Position.xz, animTime, 0.01f);
+    output.Normal = normalize(mul(waveNormal, (float3x3)WorldMatrix));
+
+    output.TexCoord = input.TexCoord;
+    output.WorldPos = worldPos;
+    output.ViewDirection = normalize(CameraPosition - worldPos);
+    output.WaveHeight = waveHeight;
+
+    return output;
+}
+
+float4 PS(VS_OUTPUT input) : COLOR
+{
+    float animTime = Time * TimeScale;
+
+    // Normalizar vectores
+    float3 N = normalize(input.Normal);
+    float3 V = normalize(input.ViewDirection);
+
+    // Múltiples capas de UVs animadas para el normal map
+    float2 uv1 = input.TexCoord * 2.0f + float2(animTime * 0.1f, animTime * 0.05f);
+    float2 uv2 = input.TexCoord * 3.0f + float2(-animTime * 0.07f, animTime * 0.12f);
+    float2 uv3 = input.TexCoord * 1.5f + float2(animTime * 0.03f, -animTime * 0.08f);
+
+    // Muestrear normales y combinar
+    float3 normal1 = tex2D(WaterNormalSampler, uv1).xyz * 2.0f - 1.0f;
+    float3 normal2 = tex2D(WaterNormalSampler, uv2).xyz * 2.0f - 1.0f;
+    float3 normal3 = tex2D(WaterNormalSampler, uv3).xyz * 2.0f - 1.0f;
+
+    float3 combinedNormal = normalize(normal1 + normal2 * 0.5f + normal3 * 0.3f);
+    N = normalize(N + combinedNormal * 0.5f);
+
+    // Calcular distorsión
+    float2 distortion = combinedNormal.xy * WaveDistortion;
+
+    // Coordenadas de proyección para reflexión/refracción
+    float2 projectedUV = (input.ProjectedPos.xy / input.ProjectedPos.w) * 0.5f + 0.5f;
+    projectedUV.y = 1.0f - projectedUV.y; // Flip Y
+
+    // Aplicar distorsión
+    float2 reflectionUV = projectedUV + distortion;
+    float2 refractionUV = projectedUV + distortion * 0.5f;
+
+    // Muestrear reflexión y refracción
+    float4 reflectionColor = tex2D(ReflectionSampler, reflectionUV);
+    float4 refractionColor = tex2D(RefractionSampler, refractionUV);
+
+    // Reflexión del skybox como fallback
+    float3 reflectionDir = reflect(-V, N);
+    float4 skyboxReflection = texCUBE(SkyboxSampler, reflectionDir);
+
+    // Combinar reflexiones
+    reflectionColor = lerp(skyboxReflection, reflectionColor, 0.7f);
+
+    // Cálculo de Fresnel
+    float fresnel = pow(1.0f - max(dot(N, V), 0.0f), FresnelPower);
+    fresnel = saturate(fresnel);
+
+    // Calcular profundidad del agua
+    float depth = saturate(input.WaveHeight / WaterDepth);
+
+    // Color base del agua basado en profundidad
+    float4 waterColor = lerp(ShallowColor, DeepColor, depth);
+
+    // Combinar refracción con color del agua
+    refractionColor = lerp(refractionColor, waterColor, 0.3f);
+
+    // Mezclar reflexión y refracción usando Fresnel
+    float4 finalColor = lerp(refractionColor, reflectionColor, fresnel * ReflectionIntensity);
+
+    // Generar espuma
+    float noise = tex2D(WaterNoiseSampler, input.TexCoord * FoamScale + animTime * 0.2f).r;
+    float foamMask = saturate((input.WaveHeight + noise * 0.5f - FoamThreshold) * FoamIntensity);
+
+    // Aplicar espuma
+    finalColor.rgb = lerp(finalColor.rgb, FoamColor.rgb, foamMask);
+
+    // Ajustar transparencia
+    finalColor.a = lerp(waterColor.a, 1.0f, foamMask);
+
+    // Añadir variación de brillo basada en ondas
+    float brightness = 1.0f + sin(animTime * 2.0f + input.WaveHeight * 10.0f) * 0.1f;
+    finalColor.rgb *= brightness;
+
+    return finalColor;
+}
+
+// Técnicas
+technique WaterTechnique
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+
+        CullMode = CCW;
+        ZEnable = true;
+        ZWriteEnable = true;
+
+        AlphaBlendEnable = true;
+        SrcBlend = SrcAlpha;
+        DestBlend = InvSrcAlpha;
+    }
+}
+
+technique WaterSimple
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 VS();
+        PixelShader = compile ps_3_0 PS();
+
+        CullMode = NONE;
+        ZEnable = true;
+        ZWriteEnable = false;
+
+        AlphaBlendEnable = true;
+        SrcBlend = SrcAlpha;
+        DestBlend = InvSrcAlpha;
+    }
+}
